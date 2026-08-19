@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { createClient } from '@supabase/supabase-js';
+import Ably from 'ably';
 import { 
   BookOpen, Globe, User, LogOut, Shield, Menu, X, Sparkles, 
   GraduationCap, HelpCircle, MessageSquare, BookMarked, Info, 
@@ -8,11 +9,14 @@ import {
 } from 'lucide-react';
 
 // ==========================================
-// 1. SUPABASE & CLOUDINARY CLIENTS
+// 1. CLIENTS & INITIALIZATION
 // ==========================================
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'placeholder';
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+const ablyApiKey = import.meta.env.VITE_ABLY_API_KEY;
+export const ably = ablyApiKey ? new Ably.Realtime({ key: ablyApiKey }) : null;
 
 export const uploadToCloudinary = async (file) => {
   const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
@@ -302,38 +306,122 @@ const Quiz = () => (
 );
 
 const Chat = () => {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
+  const [onlineUsers, setOnlineUsers] = useState(0);
 
   useEffect(() => {
-    supabase.from('messages').select('*').then(({ data }) => data && setMessages(data));
-    const channel = supabase.channel('messages').on('postgres_changes', { event: 'INSERT', table: 'messages' }, (payload) => {
-      setMessages((prev) => [...prev, payload.new]);
-    }).subscribe();
+    // 1. Fetch historical messages from Supabase
+    supabase.from('messages').select('*').order('created_at', { ascending: true }).then(({ data }) => {
+      if (data) setMessages(data);
+    });
 
-    return () => supabase.removeChannel(channel);
-  }, []);
+    if (!ably) return;
+
+    // 2. Attach to Ably Pub/Sub Channel
+    const channel = ably.channels.get('chat:global');
+
+    // Subscribe to incoming realtime messages
+    channel.subscribe('message', (msg) => {
+      setMessages((prev) => [...prev, msg.data]);
+    });
+
+    // Handle online presence tracking
+    const username = profile?.username || user?.email || 'Guest';
+    channel.presence.enter({ username });
+
+    channel.presence.get((err, members) => {
+      if (!err) setOnlineUsers(members.length);
+    });
+
+    channel.presence.subscribe('enter', () => {
+      channel.presence.get((err, members) => {
+        if (!err) setOnlineUsers(members.length);
+      });
+    });
+
+    channel.presence.subscribe('leave', () => {
+      channel.presence.get((err, members) => {
+        if (!err) setOnlineUsers(members.length);
+      });
+    });
+
+    return () => {
+      channel.presence.leave();
+      channel.unsubscribe();
+    };
+  }, [profile, user]);
 
   const send = async (e) => {
     e.preventDefault();
-    if (!text || !user) return;
-    await supabase.from('messages').insert([{ room_id: 'global', sender_id: user.id, content: text }]);
+    if (!text.trim() || !user) return;
+
+    const newMessage = {
+      room_id: 'global',
+      sender_id: user.id,
+      sender_name: profile?.username || user.email,
+      content: text,
+      created_at: new Date().toISOString()
+    };
+
+    // Publish to Ably Realtime Edge Network
+    if (ably) {
+      const channel = ably.channels.get('chat:global');
+      await channel.publish('message', newMessage);
+    }
+
+    // Persist asynchronously to Supabase Database
+    await supabase.from('messages').insert([newMessage]);
+
     setText('');
   };
 
   return (
-    <div className="max-w-3xl mx-auto py-6 glass-card p-6 rounded-3xl space-y-4 h-[60vh] flex flex-col justify-between">
-      <div className="overflow-y-auto space-y-3">
-        {messages.map((m) => (
-          <div key={m.id} className={`p-3 rounded-xl max-w-xs ${m.sender_id === user?.id ? 'ml-auto bg-amber-500/20 text-white' : 'bg-slate-900 text-slate-300'}`}>
-            {m.content}
+    <div className="max-w-3xl mx-auto py-6 glass-card p-6 rounded-3xl space-y-4 h-[65vh] flex flex-col justify-between">
+      <div className="flex justify-between items-center pb-3 border-b border-slate-800">
+        <h3 className="text-lg font-bold text-white flex items-center gap-2">
+          <MessageSquare className="w-5 h-5 text-amber-400" /> Global Fellowship Chat
+        </h3>
+        <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-semibold">
+          {onlineUsers} Online
+        </span>
+      </div>
+
+      <div className="overflow-y-auto space-y-3 flex-1 pr-2">
+        {messages.map((m, idx) => (
+          <div 
+            key={m.id || idx} 
+            className={`p-3 rounded-2xl max-w-xs sm:max-w-md ${
+              m.sender_id === user?.id 
+                ? 'ml-auto bg-amber-500/20 border border-amber-500/30 text-white' 
+                : 'bg-slate-900 border border-slate-800 text-slate-300'
+            }`}
+          >
+            {m.sender_name && m.sender_id !== user?.id && (
+              <p className="text-[10px] text-amber-400 font-bold mb-1">{m.sender_name}</p>
+            )}
+            <p className="text-sm">{m.content}</p>
           </div>
         ))}
       </div>
+
       <form onSubmit={send} className="flex gap-2 border-t border-slate-800 pt-3">
-        <input type="text" value={text} onChange={(e) => setText(e.target.value)} placeholder="Type a message..." className="flex-1 px-4 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white" />
-        <button type="submit" className="px-4 py-2 bg-amber-500 text-slate-950 font-bold rounded-xl"><Send className="w-4 h-4" /></button>
+        <input 
+          type="text" 
+          value={text} 
+          onChange={(e) => setText(e.target.value)} 
+          placeholder={user ? "Type a message..." : "Please log in to participate"} 
+          disabled={!user}
+          className="flex-1 px-4 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white disabled:opacity-50" 
+        />
+        <button 
+          type="submit" 
+          disabled={!user}
+          className="px-4 py-2 bg-amber-500 text-slate-950 font-bold rounded-xl hover:bg-amber-400 transition disabled:opacity-50"
+        >
+          <Send className="w-4 h-4" />
+        </button>
       </form>
     </div>
   );
