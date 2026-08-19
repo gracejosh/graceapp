@@ -4,12 +4,11 @@ import { createClient } from '@supabase/supabase-js';
 import Ably from 'ably';
 import { 
   BookOpen, Globe, User, LogOut, Shield, Menu, X, Sparkles, 
-  GraduationCap, HelpCircle, MessageSquare, BookMarked, Info, 
-  Search, Share2, Download, Trophy, Send, Camera, Quote, ExternalLink
+  GraduationCap, MessageSquare, Trophy, Send, Camera, Quote, ExternalLink 
 } from 'lucide-react';
 
 // ==========================================
-// 1. CLIENTS & INITIALIZATION
+// 1. CLIENTS & CLOUDINARY HELPER
 // ==========================================
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'placeholder';
@@ -21,7 +20,6 @@ export const ably = ablyApiKey ? new Ably.Realtime({ key: ablyApiKey }) : null;
 export const uploadToCloudinary = async (file) => {
   const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
   const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
-
   if (!cloudName || !uploadPreset) throw new Error('Cloudinary environment variables missing');
 
   const formData = new FormData();
@@ -48,14 +46,12 @@ const translations = {
   en: {
     home: "Home", verses: "Bible Verses", books: "Books", courses: "Courses",
     quiz: "Quiz", chat: "Chat", profile: "Profile", admin: "Admin",
-    about: "About Us", login: "Login", signup: "Sign Up", logout: "Logout",
-    search: "Search", download: "Download", share: "Share", dailyVerseTitle: "Verse of the Day"
+    about: "About Us", login: "Login", logout: "Logout", dailyVerseTitle: "Verse of the Day"
   },
   am: {
     home: "ቤት", verses: "የመጽሐፍ ቅዱስ ጥቅሶች", books: "መጻሕፍት", courses: "ኮርሶች",
     quiz: "ጥያቄዎች", chat: "ውይይት", profile: "መገለጫ", admin: "አስተዳደር",
-    about: "ስለ እኛ", login: "ግባ", signup: "ተመዝገብ", logout: "ውጣ",
-    search: "ፈልግ", download: "አውርድ", share: "አጋራ", dailyVerseTitle: "የዕለቱ የመጽሐፍ ቅዱስ ጥቅስ"
+    about: "ስለ እኛ", login: "ግባ", logout: "ውጣ", dailyVerseTitle: "የዕለቱ የመጽሐፍ ቅዱስ ጥቅስ"
   }
 };
 
@@ -138,7 +134,7 @@ const Navbar = () => {
           </div>
           <span className="font-serif text-xl font-bold gold-gradient-text">Grace Book</span>
         </Link>
-
+        
         <div className="hidden md:flex items-center gap-4">
           {links.map((l) => (
             <Link
@@ -203,7 +199,7 @@ const Footer = () => (
 );
 
 // ==========================================
-// 4. PAGES
+// 4. VIEWS & COMPONENTS
 // ==========================================
 const Home = () => {
   const { t, lang } = useLang();
@@ -280,7 +276,10 @@ const Books = () => {
             <p className="text-xs text-amber-400">{b.author}</p>
             <p className="text-sm text-slate-400 mt-2">{b.description}</p>
           </div>
-          <button onClick={() => window.open(b.cloudinary_url, '_blank')} className="w-full py-2 bg-amber-500 text-slate-950 font-bold rounded-xl text-sm">
+          <button
+            onClick={() => window.open(b.cloudinary_url, '_blank')}
+            className="w-full py-2 bg-amber-500 text-slate-950 font-bold rounded-xl text-sm"
+          >
             Download PDF
           </button>
         </div>
@@ -297,60 +296,201 @@ const Courses = () => (
   </div>
 );
 
-const Quiz = () => (
-  <div className="py-12 text-center text-slate-400 glass-card p-8 rounded-3xl max-w-xl mx-auto">
-    <Trophy className="w-12 h-12 text-amber-400 mx-auto mb-2" />
-    <h2 className="text-2xl font-serif text-white font-bold">Bible Trivia Quiz</h2>
-    <p>Test your knowledge and record your score on the leaderboard.</p>
-  </div>
-);
+const Quiz = () => {
+  const { user, profile } = useAuth();
+  const [currentQuestion, setCurrentQuestion] = useState(0);
+  const [score, setScore] = useState(0);
+  const [showScore, setShowScore] = useState(false);
+  const [leaderboard, setLeaderboard] = useState([]);
+
+  const questions = [
+    {
+      questionText: 'Who built the ark during the great flood?',
+      answerOptions: [
+        { answerText: 'Moses', isCorrect: false },
+        { answerText: 'Noah', isCorrect: true },
+        { answerText: 'Abraham', isCorrect: false },
+        { answerText: 'David', isCorrect: false },
+      ],
+    },
+    {
+      questionText: 'Which book is the first in the New Testament?',
+      answerOptions: [
+        { answerText: 'Matthew', isCorrect: true },
+        { answerText: 'Genesis', isCorrect: false },
+        { answerText: 'Revelation', isCorrect: false },
+        { answerText: 'Acts', isCorrect: false },
+      ],
+    },
+    {
+      questionText: 'How many disciples did Jesus choose?',
+      answerOptions: [
+        { answerText: '7', isCorrect: false },
+        { answerText: '10', isCorrect: false },
+        { answerText: '12', isCorrect: true },
+        { answerText: '40', isCorrect: false },
+      ],
+    },
+  ];
+
+  useEffect(() => {
+    fetchLeaderboard();
+  }, []);
+
+  const fetchLeaderboard = async () => {
+    const { data } = await supabase
+      .from('quiz_scores')
+      .select('*')
+      .order('score', { ascending: false })
+      .limit(5);
+    if (data) setLeaderboard(data);
+  };
+
+  const handleAnswerClick = (isCorrect) => {
+    const nextScore = isCorrect ? score + 1 : score;
+    if (isCorrect) setScore(nextScore);
+
+    const nextQuestion = currentQuestion + 1;
+    if (nextQuestion < questions.length) {
+      setCurrentQuestion(nextQuestion);
+    } else {
+      setShowScore(true);
+      if (user) saveScore(nextScore);
+    }
+  };
+
+  const saveScore = async (finalScore) => {
+    await supabase.from('quiz_scores').insert([
+      {
+        user_id: user.id,
+        username: profile?.username || user.email,
+        score: finalScore,
+        total_questions: questions.length,
+      },
+    ]);
+    fetchLeaderboard();
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto py-8 space-y-6">
+      <div className="glass-card p-8 rounded-3xl text-center space-y-4">
+        <Trophy className="w-12 h-12 text-amber-400 mx-auto" />
+        <h2 className="text-2xl font-serif font-bold text-white">Bible Trivia Quiz</h2>
+        
+        {showScore ? (
+          <div className="space-y-4">
+            <p className="text-xl text-slate-200">
+              You scored <span className="text-amber-400 font-bold">{score}</span> out of {questions.length}!
+            </p>
+            <button
+              onClick={() => {
+                setShowScore(false);
+                setCurrentQuestion(0);
+                setScore(0);
+              }}
+              className="px-6 py-2 bg-amber-500 text-slate-950 font-bold rounded-xl"
+            >
+              Play Again
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-6 text-left">
+            <p className="text-sm text-amber-400 font-semibold">Question {currentQuestion + 1} of {questions.length}</p>
+            <p className="text-lg text-white font-medium">{questions[currentQuestion].questionText}</p>
+            <div className="grid grid-cols-1 gap-3">
+              {questions[currentQuestion].answerOptions.map((option, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => handleAnswerClick(option.isCorrect)}
+                  className="w-full py-3 px-4 text-left bg-slate-900 border border-slate-800 rounded-xl hover:border-amber-500 text-slate-200 transition"
+                >
+                  {option.answerText}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="glass-card p-6 rounded-3xl space-y-4">
+        <h3 className="text-lg font-bold text-white flex items-center gap-2">
+          <Trophy className="w-5 h-5 text-amber-400" /> Leaderboard
+        </h3>
+        <div className="space-y-2">
+          {leaderboard.map((item, index) => (
+            <div key={item.id} className="flex justify-between items-center bg-slate-900/50 p-3 rounded-xl border border-slate-800">
+              <span className="text-slate-300 font-medium">#{index + 1} {item.username}</span>
+              <span className="text-amber-400 font-bold">{item.score}/{item.total_questions}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const Chat = () => {
   const { user, profile } = useAuth();
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
-  const [onlineUsers, setOnlineUsers] = useState(0);
+  const [onlineUsers, setOnlineUsers] = useState(1);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // 1. Fetch historical messages from Supabase
-    supabase.from('messages').select('*').order('created_at', { ascending: true }).then(({ data }) => {
-      if (data) setMessages(data);
-    });
+    const fetchMessages = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('messages')
+          .select('*')
+          .order('created_at', { ascending: true });
+        
+        if (!error && data) {
+          setMessages(data);
+        }
+      } catch (err) {
+        console.error("Error loading chat messages:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchMessages();
 
     if (!ably) return;
 
-    // 2. Attach to Ably Pub/Sub Channel
-    const channel = ably.channels.get('chat:global');
+    try {
+      const channel = ably.channels.get('chat:global');
 
-    // Subscribe to incoming realtime messages
-    channel.subscribe('message', (msg) => {
-      setMessages((prev) => [...prev, msg.data]);
-    });
-
-    // Handle online presence tracking
-    const username = profile?.username || user?.email || 'Guest';
-    channel.presence.enter({ username });
-
-    channel.presence.get((err, members) => {
-      if (!err) setOnlineUsers(members.length);
-    });
-
-    channel.presence.subscribe('enter', () => {
-      channel.presence.get((err, members) => {
-        if (!err) setOnlineUsers(members.length);
+      channel.subscribe('message', (msg) => {
+        setMessages((prev) => [...prev, msg.data]);
       });
-    });
 
-    channel.presence.subscribe('leave', () => {
+      const username = profile?.username || user?.email || 'Guest';
+      channel.presence.enter({ username });
+
       channel.presence.get((err, members) => {
-        if (!err) setOnlineUsers(members.length);
+        if (!err && members) setOnlineUsers(members.length);
       });
-    });
 
-    return () => {
-      channel.presence.leave();
-      channel.unsubscribe();
-    };
+      channel.presence.subscribe('enter', () => {
+        channel.presence.get((err, members) => {
+          if (!err && members) setOnlineUsers(members.length);
+        });
+      });
+
+      channel.presence.subscribe('leave', () => {
+        channel.presence.get((err, members) => {
+          if (!err && members) setOnlineUsers(members.length);
+        });
+      });
+
+      return () => {
+        channel.presence.leave();
+        channel.unsubscribe();
+      };
+    } catch (e) {
+      console.warn("Ably realtime connection issue:", e);
+    }
   }, [profile, user]);
 
   const send = async (e) => {
@@ -365,16 +505,19 @@ const Chat = () => {
       created_at: new Date().toISOString()
     };
 
-    // Publish to Ably Realtime Edge Network
+    setMessages((prev) => [...prev, newMessage]);
+    setText('');
+
     if (ably) {
-      const channel = ably.channels.get('chat:global');
-      await channel.publish('message', newMessage);
+      try {
+        const channel = ably.channels.get('chat:global');
+        await channel.publish('message', newMessage);
+      } catch (e) {
+        console.warn("Ably publish failed:", e);
+      }
     }
 
-    // Persist asynchronously to Supabase Database
     await supabase.from('messages').insert([newMessage]);
-
-    setText('');
   };
 
   return (
@@ -389,34 +532,40 @@ const Chat = () => {
       </div>
 
       <div className="overflow-y-auto space-y-3 flex-1 pr-2">
-        {messages.map((m, idx) => (
-          <div 
-            key={m.id || idx} 
-            className={`p-3 rounded-2xl max-w-xs sm:max-w-md ${
-              m.sender_id === user?.id 
-                ? 'ml-auto bg-amber-500/20 border border-amber-500/30 text-white' 
-                : 'bg-slate-900 border border-slate-800 text-slate-300'
-            }`}
-          >
-            {m.sender_name && m.sender_id !== user?.id && (
-              <p className="text-[10px] text-amber-400 font-bold mb-1">{m.sender_name}</p>
-            )}
-            <p className="text-sm">{m.content}</p>
-          </div>
-        ))}
+        {loading ? (
+          <p className="text-center text-slate-400 text-sm py-8">Loading fellowship messages...</p>
+        ) : messages.length === 0 ? (
+          <p className="text-center text-slate-400 text-sm py-8">No messages yet. Be the first to say welcome!</p>
+        ) : (
+          messages.map((m, idx) => (
+            <div
+              key={m.id || idx}
+              className={`p-3 rounded-2xl max-w-xs sm:max-w-md ${
+                m.sender_id === user?.id
+                  ? 'ml-auto bg-amber-500/20 border border-amber-500/30 text-white'
+                  : 'bg-slate-900 border border-slate-800 text-slate-300'
+              }`}
+            >
+              {m.sender_name && m.sender_id !== user?.id && (
+                <p className="text-[10px] text-amber-400 font-bold mb-1">{m.sender_name}</p>
+              )}
+              <p className="text-sm">{m.content}</p>
+            </div>
+          ))
+        )}
       </div>
 
       <form onSubmit={send} className="flex gap-2 border-t border-slate-800 pt-3">
-        <input 
-          type="text" 
-          value={text} 
-          onChange={(e) => setText(e.target.value)} 
-          placeholder={user ? "Type a message..." : "Please log in to participate"} 
+        <input
+          type="text"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder={user ? "Type a message..." : "Please log in to participate"}
           disabled={!user}
-          className="flex-1 px-4 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white disabled:opacity-50" 
+          className="flex-1 px-4 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white disabled:opacity-50"
         />
-        <button 
-          type="submit" 
+        <button
+          type="submit"
           disabled={!user}
           className="px-4 py-2 bg-amber-500 text-slate-950 font-bold rounded-xl hover:bg-amber-400 transition disabled:opacity-50"
         >
@@ -428,25 +577,169 @@ const Chat = () => {
 };
 
 const Profile = () => {
-  const { user, profile } = useAuth();
+  const { user, profile, fetchProfile } = useAuth();
+  const [uploading, setUploading] = useState(false);
+
+  const handleAvatarChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+
+    if (!file.type.startsWith('image/')) {
+      alert('Please upload an image file.');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const avatarUrl = await uploadToCloudinary(file);
+      const { error } = await supabase
+        .from('profiles')
+        .update({ avatar_url: avatarUrl, updated_at: new Date().toISOString() })
+        .eq('id', user.id);
+
+      if (error) throw error;
+      await fetchProfile(user.id);
+      alert('Avatar updated successfully!');
+    } catch (err) {
+      console.error('Error uploading avatar:', err);
+      alert('Failed to upload avatar.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
   return (
-    <div className="max-w-md mx-auto py-8 glass-card p-8 rounded-3xl text-center space-y-4">
-      <div className="w-20 h-20 bg-slate-800 border-2 border-amber-500 rounded-full mx-auto flex items-center justify-center text-amber-400">
-        <User className="w-10 h-10" />
+    <div className="max-w-md mx-auto py-8 glass-card p-8 rounded-3xl text-center space-y-6">
+      <div className="relative w-28 h-28 mx-auto group">
+        {profile?.avatar_url ? (
+          <img
+            src={profile.avatar_url}
+            alt="Profile Avatar"
+            className="w-full h-full object-cover rounded-full border-2 border-amber-500 shadow-lg"
+          />
+        ) : (
+          <div className="w-full h-full bg-slate-800 border-2 border-amber-500 rounded-full flex items-center justify-center text-amber-400">
+            <User className="w-12 h-12" />
+          </div>
+        )}
+
+        <label
+          htmlFor="avatar-upload"
+          className="absolute inset-0 bg-slate-950/60 rounded-full flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer border-2 border-dashed border-amber-400"
+        >
+          <Camera className="w-6 h-6 text-amber-400 mb-1" />
+          <span className="text-[10px] text-amber-300 font-bold">
+            {uploading ? 'Uploading...' : 'Change'}
+          </span>
+        </label>
+        <input
+          id="avatar-upload"
+          type="file"
+          accept="image/*"
+          disabled={uploading}
+          onChange={handleAvatarChange}
+          className="hidden"
+        />
       </div>
-      <h2 className="text-xl font-bold text-white">{profile?.username || user?.email || 'Believer'}</h2>
-      <p className="text-sm text-slate-400">{profile?.bio || 'No bio set yet.'}</p>
+
+      <div className="space-y-1">
+        <h2 className="text-xl font-bold text-white">{profile?.username || user?.email || 'Believer'}</h2>
+        <p className="text-sm text-slate-400">{profile?.bio || 'No bio set yet.'}</p>
+      </div>
     </div>
   );
 };
 
-const Admin = () => (
-  <div className="max-w-md mx-auto py-8 glass-card p-8 rounded-3xl text-center space-y-4">
-    <Shield className="w-12 h-12 text-amber-400 mx-auto" />
-    <h2 className="text-2xl font-serif font-bold text-white">Admin Dashboard</h2>
-    <p className="text-slate-400 text-sm">Protected management area for content management.</p>
-  </div>
-);
+const Admin = () => {
+  const [verseText, setVerseText] = useState('');
+  const [reference, setReference] = useState('');
+  const [bookTitle, setBookTitle] = useState('');
+  const [bookAuthor, setBookAuthor] = useState('');
+  const [file, setFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+
+  const handleAddVerse = async (e) => {
+    e.preventDefault();
+    if (!verseText || !reference) return;
+    await supabase.from('bible_verses').insert([{ verse_text: verseText, reference }]);
+    setVerseText('');
+    setReference('');
+    alert('Verse added successfully!');
+  };
+
+  const handleAddBook = async (e) => {
+    e.preventDefault();
+    if (!bookTitle || !file) return;
+    setUploading(true);
+    try {
+      const fileUrl = await uploadToCloudinary(file);
+      await supabase.from('books').insert([
+        { title: bookTitle, author: bookAuthor, cloudinary_url: fileUrl },
+      ]);
+      setBookTitle('');
+      setBookAuthor('');
+      setFile(null);
+      alert('Book uploaded successfully!');
+    } catch (err) {
+      alert('Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="max-w-3xl mx-auto py-8 space-y-8">
+      <div className="glass-card p-6 rounded-3xl space-y-4">
+        <h3 className="text-xl font-bold text-white">Add Bible Verse</h3>
+        <form onSubmit={handleAddVerse} className="space-y-3">
+          <textarea
+            placeholder="Verse Text"
+            value={verseText}
+            onChange={(e) => setVerseText(e.target.value)}
+            className="w-full px-4 py-2 bg-slate-900 border border-slate-800 rounded-xl text-white"
+          />
+          <input
+            type="text"
+            placeholder="Reference (e.g. John 3:16)"
+            value={reference}
+            onChange={(e) => setReference(e.target.value)}
+            className="w-full px-4 py-2 bg-slate-900 border border-slate-800 rounded-xl text-white"
+          />
+          <button type="submit" className="px-6 py-2 bg-amber-500 text-slate-950 font-bold rounded-xl">Add Verse</button>
+        </form>
+      </div>
+
+      <div className="glass-card p-6 rounded-3xl space-y-4">
+        <h3 className="text-xl font-bold text-white">Upload Book (PDF)</h3>
+        <form onSubmit={handleAddBook} className="space-y-3">
+          <input
+            type="text"
+            placeholder="Book Title"
+            value={bookTitle}
+            onChange={(e) => setBookTitle(e.target.value)}
+            className="w-full px-4 py-2 bg-slate-900 border border-slate-800 rounded-xl text-white"
+          />
+          <input
+            type="text"
+            placeholder="Author"
+            value={bookAuthor}
+            onChange={(e) => setBookAuthor(e.target.value)}
+            className="w-full px-4 py-2 bg-slate-900 border border-slate-800 rounded-xl text-white"
+          />
+          <input
+            type="file"
+            accept="application/pdf"
+            onChange={(e) => setFile(e.target.files[0])}
+            className="w-full text-slate-400"
+          />
+          <button type="submit" disabled={uploading} className="px-6 py-2 bg-amber-500 text-slate-950 font-bold rounded-xl">
+            {uploading ? 'Uploading...' : 'Upload Book'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+};
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -463,8 +756,20 @@ const Login = () => {
     <div className="max-w-md mx-auto py-12 glass-card p-8 rounded-3xl space-y-4">
       <h2 className="text-2xl font-serif font-bold text-center gold-gradient-text">Sign In</h2>
       <form onSubmit={handleLogin} className="space-y-3">
-        <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-4 py-2 bg-slate-900 border border-slate-800 rounded-xl text-white" />
-        <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-4 py-2 bg-slate-900 border border-slate-800 rounded-xl text-white" />
+        <input
+          type="email"
+          placeholder="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="w-full px-4 py-2 bg-slate-900 border border-slate-800 rounded-xl text-white"
+        />
+        <input
+          type="password"
+          placeholder="Password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          className="w-full px-4 py-2 bg-slate-900 border border-slate-800 rounded-xl text-white"
+        />
         <button type="submit" className="w-full py-2.5 bg-amber-500 text-slate-950 font-bold rounded-xl">Log In</button>
       </form>
     </div>
